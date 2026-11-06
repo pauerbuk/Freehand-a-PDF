@@ -17,11 +17,26 @@ FreeHand was discontinued long ago and current versions of Illustrator often ref
 
 Your files are never overwritten: output goes next to the original, as `Name (2).pdf` if the name is taken.
 
+## Download
+
+Get the zip from the [latest release](https://github.com/pauerbuk/Freehand-a-PDF/releases/latest) and unzip it. It is one app for **Apple silicon and Intel**, for **macOS 12 or later**.
+
+The app isn't notarized by Apple, because that requires a paid developer membership, so **macOS will refuse to open it the first time**. If you're happy to trust it, either:
+
+- try to open it, then go to **System Settings → Privacy & Security** and click **Open Anyway**; or
+- run this in Terminal, adjusting the path:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/FreeHand a PDF.app"
+```
+
+If you'd rather not, you can build it yourself from the source below.
+
+It has only been tested on Apple silicon with macOS 26, where the Intel version was also run through Rosetta and gave identical results. It has **not been tried on a real Intel Mac or on older macOS versions**: reports are welcome.
+
 ## Build
 
-There is no prebuilt download: an unsigned app downloaded from the internet would be blocked by macOS.
-
-You need the Xcode command line tools and [Homebrew](https://brew.sh). Homebrew only downloads two prebuilt libraries into `build/`: nothing is installed on your system.
+You only need the Xcode command line tools (`xcode-select --install`). The script downloads the three libraries it needs, checks them, and compiles everything into `build/`: nothing is installed on your system.
 
 ```bash
 git clone https://github.com/pauerbuk/Freehand-a-PDF.git
@@ -30,7 +45,7 @@ cd Freehand-a-PDF
 open build
 ```
 
-Drag `FreeHand a PDF.app` wherever you like. The built app uses the libraries for your macOS version and processor, so it may not run on older Macs. It has only been tested on Apple silicon with macOS 26.
+Drag `FreeHand a PDF.app` wherever you like. An app you build yourself opens without any warning. The build hasn't been tried on Intel Macs or older macOS versions. To target another macOS version, use `MIN_MACOS=11.0 ./build.sh`.
 
 ## Usage
 
@@ -62,7 +77,7 @@ Sample files are welcome, especially from versions before FreeHand 8, as long as
 
 ## How it works
 
-Reading is done by [libfreehand](https://wiki.documentfoundation.org/DLP/Libraries/libfreehand) with a [small patch](patches/libfreehand-0.1.4.patch), downloaded and applied at build time. The patch:
+Reading is done by [libfreehand](https://wiki.documentfoundation.org/DLP/Libraries/libfreehand) with a [small patch](patches/libfreehand-0.1.4.patch), downloaded and applied at build time. It also uses librevenge, with a [patch](patches/librevenge-0.0.6.patch) that removes its need for Boost, and lcms2. The libfreehand patch:
 
 - reads files with more than about 130,000 objects, which the original fails on;
 - scales stroke widths with their object, so shrunk artwork doesn't look bolder;
@@ -73,7 +88,7 @@ The drawing code, the `.ai` writer and the `FHD2` reader are in [`Sources/FHEngi
 
 ## License
 
-[Mozilla Public License 2.0](LICENSE). The built app also contains librevenge (MPL 2.0 / LGPL 2.1) and lcms2 (MIT), and their license files are copied into the app.
+[Mozilla Public License 2.0](LICENSE). The built app also contains libfreehand (MPL 2.0), librevenge (MPL 2.0 / LGPL 2.1) and lcms2 (MIT), and their license files are copied into the app.
 
 This project isn't affiliated with or endorsed by Adobe. FreeHand and Illustrator are trademarks of Adobe; they're named here only to describe which files this tool works with.
 
@@ -92,9 +107,19 @@ Una piccola app per Mac che converte i vecchi file **FreeHand** in **PDF** o **I
 
 Non sovrascrive mai nulla: il file creato va accanto all'originale.
 
+**Come scaricarla**
+
+Scarica lo zip dall'[ultima versione](https://github.com/pauerbuk/Freehand-a-PDF/releases/latest) e aprilo. È un'unica app per **processori Apple e Intel**, per **macOS 12 o successivi**.
+
+L'app non è autenticata da Apple, perché servirebbe un'iscrizione a pagamento, quindi **la prima volta macOS rifiuta di aprirla**. Se ti fidi, prova ad aprirla, poi vai in **Impostazioni di Sistema → Privacy e sicurezza** e clicca **Apri comunque**. In alternativa, nel Terminale:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/FreeHand a PDF.app"
+```
+
 **Come compilarla**
 
-Non c'è un'app già pronta da scaricare, perché macOS la bloccherebbe. Servono gli strumenti da riga di comando di Xcode e Homebrew, poi:
+Se preferisci compilarla da te, si apre senza avvisi. Bastano gli strumenti da riga di comando di Xcode (`xcode-select --install`), poi:
 
 ```bash
 git clone https://github.com/pauerbuk/Freehand-a-PDF.git
@@ -102,6 +127,8 @@ cd Freehand-a-PDF
 ./build.sh
 open build
 ```
+
+L'app è stata provata solo su processore Apple con macOS 26, dove anche la versione Intel, eseguita con Rosetta, dà risultati identici. Su un vero Mac Intel e sui macOS più vecchi non è ancora stata provata: le segnalazioni sono benvenute.
 
 **Limiti**
 

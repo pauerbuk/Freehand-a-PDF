@@ -1,79 +1,82 @@
 #!/bin/zsh
-# Builds "FreeHand a PDF.app" in ./build.
-# Needs the Xcode command line tools and Homebrew. Homebrew is only used to download
-# prebuilt librevenge and lcms2 packages: nothing gets installed on your system.
+# Builds a universal "FreeHand a PDF.app" (Apple silicon and Intel) in ./build.
+# Needs only the Xcode command line tools: libraries are downloaded and compiled here.
 set -euo pipefail
 cd "${0:A:h}"
 
-FH_VERSION=0.1.4
-FH_URL="https://dev-www.libreoffice.org/src/libfreehand/libfreehand-$FH_VERSION.tar.xz"
-FH_SHA256=350b10d24a76d7e8c8ae98b74c2d432a2c8ddec08935d09856d20b695a35e600
+MIN_MACOS="${MIN_MACOS:-12.0}"
+ARCHS=(arm64 x86_64)
 BUILD="$PWD/build"
-DEPS="$BUILD/deps"
 OBJ="$BUILD/obj"
 APP="$BUILD/FreeHand a PDF.app"
+CACHE="${XDG_CACHE_HOME:-$HOME/Library/Caches}/Freehand-a-PDF"
 
-for tool in brew curl patch shasum swiftc clang++ install_name_tool codesign; do
-  command -v "$tool" >/dev/null || { echo "Missing tool: $tool" >&2; exit 1; }
+for tool in curl patch shasum swiftc clang clang++ lipo codesign; do
+  command -v "$tool" >/dev/null || { echo "Missing tool: $tool (try: xcode-select --install)" >&2; exit 1; }
 done
 
 rm -rf "$BUILD"
-mkdir -p "$DEPS/include" "$DEPS/lib" "$DEPS/licenses" "$OBJ"
+mkdir -p "$OBJ" "$CACHE"
 
-echo "==> libfreehand $FH_VERSION"
-curl -fsSL "$FH_URL" -o "$BUILD/libfreehand.tar.xz"
-echo "$FH_SHA256  $BUILD/libfreehand.tar.xz" | shasum -a 256 -c - >/dev/null
-tar -xJf "$BUILD/libfreehand.tar.xz" -C "$BUILD"
-FH="$BUILD/libfreehand-$FH_VERSION"
-patch -d "$FH" -p1 --quiet < patches/libfreehand-$FH_VERSION.patch
-cp -R "$FH/inc/libfreehand" "$DEPS/include/libfreehand"
-cp "$FH/COPYING" "$DEPS/licenses/libfreehand-COPYING.txt"
+# fetch <url> <sha256> <folder>: downloads once, checks the file and unpacks it into build/
+fetch() {
+  local file="$CACHE/${1:t}"
+  [[ -f "$file" ]] || curl -fsSL --retry 3 "$1" -o "$file"
+  echo "$2  $file" | shasum -a 256 -c - >/dev/null || { rm -f "$file"; echo "Bad checksum: $1" >&2; exit 1; }
+  tar -xf "$file" -C "$BUILD"
+  print "$BUILD/$3"
+}
 
-for formula in librevenge little-cms2; do
-  echo "==> $formula"
-  brew fetch --quiet --force-bottle "$formula" >/dev/null
-  mkdir -p "$DEPS/$formula"
-  tar -xzf "$(brew --cache --force-bottle "$formula")" -C "$DEPS/$formula"
+echo "==> Downloading libraries"
+FH=$(fetch https://dev-www.libreoffice.org/src/libfreehand/libfreehand-0.1.4.tar.xz \
+  350b10d24a76d7e8c8ae98b74c2d432a2c8ddec08935d09856d20b695a35e600 libfreehand-0.1.4)
+RV=$(fetch https://downloads.sourceforge.net/project/libwpd/librevenge/librevenge-0.0.6/librevenge-0.0.6.tar.xz \
+  19eacf5ce55d7fe6a990a45142589cdf7da0c7b68701797f133482cb44f189fa librevenge-0.0.6)
+CMS=$(fetch https://downloads.sourceforge.net/project/lcms/lcms/2.19.1/lcms2-2.19.1.tar.gz \
+  bfc54f7bab59fbc921012014a8032e4cba4abd46db47d46b76416a8c0b2815c8 lcms2-2.19.1)
+patch -d "$FH" -p1 --quiet < patches/libfreehand-0.1.4.patch
+patch -d "$RV" -p1 --quiet < patches/librevenge-0.0.6.patch
+
+ARCH_FLAGS=(-arch arm64 -arch x86_64 -mmacosx-version-min="$MIN_MACOS" -O2 -w)
+CXX_FLAGS=(-std=c++17 "${ARCH_FLAGS[@]}" -I"$FH/inc" -I"$RV/inc" -I"$CMS/include")
+
+echo "==> Compiling libraries"
+for src in "$CMS"/src/*.c; do
+  clang "${ARCH_FLAGS[@]}" -I"$CMS/include" -I"$CMS/src" -c "$src" -o "$OBJ/lcms-${src:t}.o" &
 done
-REVENGE=("$DEPS"/librevenge/librevenge/*(/[1]))
-LCMS=("$DEPS"/little-cms2/little-cms2/*(/[1]))
-cp -R "$REVENGE"/include/librevenge-0.0/librevenge "$REVENGE"/include/librevenge-0.0/librevenge-stream "$DEPS/include/"
-cp "$LCMS"/include/lcms2.h "$DEPS/include/"
-cp "$LCMS"/lib/liblcms2.a "$DEPS/lib/"
-cp "$REVENGE"/lib/librevenge-0.0.0.dylib "$REVENGE"/lib/librevenge-stream-0.0.0.dylib "$DEPS/lib/"
-cp "$REVENGE"/COPYING.MPL "$DEPS/licenses/librevenge-COPYING.MPL.txt"
-cp "$REVENGE"/COPYING.LGPL "$DEPS/licenses/librevenge-COPYING.LGPL.txt"
-cp "$LCMS"/LICENSE "$DEPS/licenses/lcms2-LICENSE.txt"
-
-# The Homebrew packages refer to their install location: make them relocatable inside the app.
-chmod -R u+w "$DEPS/lib"
-for lib in "$DEPS"/lib/*.dylib; do
-  install_name_tool -id "@rpath/${lib:t}" "$lib" 2>/dev/null
-  for dep in $(otool -L "$lib" | tail -n +2 | awk '{print $1}' | grep '@@HOMEBREW' || true); do
-    install_name_tool -change "$dep" "@rpath/${dep:t}" "$lib" 2>/dev/null
-  done
-  codesign --force -s - "$lib" 2>/dev/null
+wait
+for name in RVNGBinaryData RVNGMemoryStream RVNGProperty RVNGPropertyList RVNGPropertyListVector RVNGString \
+            RVNGStringVector RVNGSVGDrawingGenerator RVNGStreamImplementation RVNGOLEStream RVNGZipStream; do
+  clang++ "${CXX_FLAGS[@]}" -I"$RV/src/lib" -c "$RV/src/lib/$name.cpp" -o "$OBJ/rv-$name.o" &
 done
-
-echo "==> Compiling"
+wait
 for src in "$FH"/src/lib/*.cpp; do
-  clang++ -std=c++17 -O2 -w -DLIBFREEHAND_BUILD=1 -I"$DEPS/include" -I"$FH/src/lib" -c "$src" -o "$OBJ/${src:t}.o"
+  clang++ "${CXX_FLAGS[@]}" -DLIBFREEHAND_BUILD=1 -I"$FH/src/lib" -c "$src" -o "$OBJ/fh-${src:t}.o" &
 done
-clang++ -std=c++17 -O2 -fobjc-arc -I"$DEPS/include" -ISources -c Sources/FHEngine.mm -o "$OBJ/FHEngine.o"
+wait
 
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources/Licenses" "$APP/Contents/Resources/Source"
-swiftc -O -import-objc-header Sources/FHEngine.h Sources/main.swift "$OBJ"/*.o "$DEPS/lib/liblcms2.a" \
-  "$DEPS/lib/librevenge-0.0.0.dylib" "$DEPS/lib/librevenge-stream-0.0.0.dylib" -lz -lc++ \
-  -framework AppKit -framework CoreText -framework ImageIO \
-  -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
-  -o "$APP/Contents/MacOS/FreeHand a PDF"
+echo "==> Compiling the app"
+clang++ "${CXX_FLAGS[@]}" -fobjc-arc -ISources -c Sources/FHEngine.mm -o "$OBJ/FHEngine.o"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Licenses" "$APP/Contents/Resources/Source"
+THIN=()
+for arch in $ARCHS; do
+  swiftc -O -target "$arch-apple-macos$MIN_MACOS" -import-objc-header Sources/FHEngine.h Sources/main.swift \
+    "$OBJ"/*.o -lz -lc++ -framework AppKit -framework CoreText -framework ImageIO \
+    -o "$BUILD/app-$arch" 2>&1 | grep -v 'SwiftUICore' || true
+  THIN+=("$BUILD/app-$arch")
+done
+lipo -create "${THIN[@]}" -output "$APP/Contents/MacOS/FreeHand a PDF"
 
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-plutil -replace LSMinimumSystemVersion -string "$(sw_vers -productVersion | cut -d. -f1).0" "$APP/Contents/Info.plist"
+plutil -replace LSMinimumSystemVersion -string "$MIN_MACOS" "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
-cp "$DEPS"/licenses/* LICENSE "$APP/Contents/Resources/Licenses/"
+cp LICENSE "$APP/Contents/Resources/Licenses/"
+cp "$FH/COPYING" "$APP/Contents/Resources/Licenses/libfreehand-COPYING.txt"
+cp "$RV/COPYING.MPL" "$APP/Contents/Resources/Licenses/librevenge-COPYING.MPL.txt"
+cp "$RV/COPYING.LGPL" "$APP/Contents/Resources/Licenses/librevenge-COPYING.LGPL.txt"
+cp "$CMS/LICENSE" "$APP/Contents/Resources/Licenses/lcms2-LICENSE.txt" 2>/dev/null || cp "$CMS/COPYING" "$APP/Contents/Resources/Licenses/lcms2-LICENSE.txt"
 cp Sources/* patches/* "$APP/Contents/Resources/Source/"
-cp "$DEPS"/lib/*.dylib "$APP/Contents/Frameworks/"
+xattr -cr "$APP"
 codesign --force --deep -s - "$APP" 2>/dev/null
 
 echo "==> Done: $APP"
