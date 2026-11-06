@@ -1,0 +1,340 @@
+diff -ruN a/src/lib/FHCollector.cpp b/src/lib/FHCollector.cpp
+--- a/src/lib/FHCollector.cpp	2026-11-06 19:03:50
++++ b/src/lib/FHCollector.cpp	2026-11-06 19:03:50
+@@ -537,7 +537,7 @@
+     return;
+ 
+   FHPath fhPath(*path);
+-  unsigned short xform = fhPath.getXFormId();
++  unsigned xform = fhPath.getXFormId();
+ 
+   if (xform)
+   {
+@@ -944,20 +944,29 @@
+   if (fhPath.getEvenOdd())
+     propList.insert("svg:fill-rule", "evenodd");
+ 
+-  unsigned short xform = fhPath.getXFormId();
++  unsigned xform = fhPath.getXFormId();
++  double strokeScale = 1.0;
+ 
+   if (xform)
+   {
+     const FHTransform *trafo = _findTransform(xform);
+     if (trafo)
++    {
++      strokeScale *= sqrt(fabs(trafo->m_m11 * trafo->m_m22 - trafo->m_m12 * trafo->m_m21));
+       fhPath.transform(*trafo);
++    }
+   }
+   std::stack<FHTransform> groupTransforms(m_currentTransforms);
+   while (!groupTransforms.empty())
+   {
++    strokeScale *= sqrt(fabs(groupTransforms.top().m_m11 * groupTransforms.top().m_m22 - groupTransforms.top().m_m12 * groupTransforms.top().m_m21));
+     fhPath.transform(groupTransforms.top());
+     groupTransforms.pop();
+   }
++  // FreeHand ingrandisce e riduce anche il tratto insieme alla forma: senza questo, un disegno ridotto
++  // al 15% tiene il tratto da 1 pt originale e le lettere sembrano ingrassate.
++  if (propList["svg:stroke-width"] && strokeScale > 0.0)
++    propList.insert("svg:stroke-width", propList["svg:stroke-width"]->getDouble() * strokeScale);
+   _normalizePath(fhPath);
+ 
+   for (std::vector<FHTransform>::const_iterator iter = m_fakeTransforms.begin(); iter != m_fakeTransforms.end(); ++iter)
+@@ -979,50 +988,14 @@
+   painter->drawPath(pList);
+   if (contentId)
+   {
+-    FHBoundingBox bBox;
+-    fhPath.getBoundingBox(bBox.m_xmin, bBox.m_ymin, bBox.m_xmax, bBox.m_ymax);
+-    FHTransform trafo(1.0, 0.0, 0.0, 1.0, - bBox.m_xmin, - bBox.m_ymin);
+-    m_fakeTransforms.push_back(trafo);
+-    librevenge::RVNGStringVector svgOutput;
+-    librevenge::RVNGSVGDrawingGenerator generator(svgOutput, "");
+-    propList.clear();
+-    propList.insert("svg:width", bBox.m_xmax - bBox.m_xmin);
+-    propList.insert("svg:height", bBox.m_ymax - bBox.m_ymin);
+-    generator.startPage(propList);
+-    _outputSomething(contentId, &generator);
+-    generator.endPage();
+-    if (!svgOutput.empty() && svgOutput[0].size() > 140) // basically empty svg if it is not fullfilled
+-    {
+-      const char *header =
+-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n";
+-      librevenge::RVNGBinaryData output((const unsigned char *)header, strlen(header));
+-      output.append((unsigned char *)svgOutput[0].cstr(), strlen(svgOutput[0].cstr()));
+-#if DUMP_CONTENTS
+-      {
+-        librevenge::RVNGString filename;
+-        filename.sprintf("fhcontents%.4x.svg", contentId);
+-        FILE *f = fopen(filename.cstr(), "wb");
+-        if (f)
+-        {
+-          const unsigned char *tmpBuffer = output.getDataBuffer();
+-          for (unsigned long k = 0; k < output.size(); k++)
+-            fprintf(f, "%c",tmpBuffer[k]);
+-          fclose(f);
+-        }
+-      }
+-#endif
+-      propList.clear();
+-      propList.insert("draw:stroke", "none");
+-      propList.insert("draw:fill", "bitmap");
+-      propList.insert("librevenge:mime-type", "image/svg+xml");
+-      propList.insert("style:repeat", "stretch");
+-      propList.insert("draw:fill-image", output);
+-      painter->setStyle(propList);
+-      painter->drawPath(pList);
+-    }
+-    if (!m_fakeTransforms.empty())
+-      m_fakeTransforms.pop_back();
++    librevenge::RVNGPropertyList clipProps;
++    clipProps.insert("svg:d", propVec);
++    if (fhPath.getEvenOdd())
++      clipProps.insert("svg:fill-rule", "evenodd");
++    painter->openGroup(clipProps);
++    _outputSomething(contentId, painter);
+     painter->closeGroup();
++    painter->closeGroup();
+   }
+ #if DEBUG_BOUNDING_BOX
+   {
+@@ -1137,7 +1110,7 @@
+       _appendFillProperties(propList, fhPath.getGraphicStyleId());
+       if (fhPath.getEvenOdd())
+         propList.insert("svg:fill-rule", "evenodd");
+-      unsigned short xform = fhPath.getXFormId();
++      unsigned xform = fhPath.getXFormId();
+ 
+       if (xform)
+       {
+@@ -1168,48 +1141,13 @@
+       pList.insert("svg:d", propVec);
+ 
+ 
+-      FHBoundingBox bBox;
+-      fhPath.getBoundingBox(bBox.m_xmin, bBox.m_ymin, bBox.m_xmax, bBox.m_ymax);
+-      FHTransform trafo(1.0, 0.0, 0.0, 1.0, - bBox.m_xmin, - bBox.m_ymin);
+-      m_fakeTransforms.push_back(trafo);
+-      librevenge::RVNGStringVector svgOutput;
+-      librevenge::RVNGSVGDrawingGenerator generator(svgOutput, "");
+-      propList.clear();
+-      propList.insert("svg:width", bBox.m_xmax - bBox.m_xmin);
+-      propList.insert("svg:height", bBox.m_ymax - bBox.m_ymin);
+-      generator.startPage(propList);
+-      _outputGroup(group, &generator);
+-      generator.endPage();
+-      if (!svgOutput.empty() && svgOutput[0].size() > 140) // basically empty svg if it is not fullfilled
+-      {
+-        const char *header =
+-          "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n";
+-        librevenge::RVNGBinaryData output((const unsigned char *)header, strlen(header));
+-        output.append((unsigned char *)svgOutput[0].cstr(), strlen(svgOutput[0].cstr()));
+-#if DUMP_CLIP_GROUPS
+-        {
+-          librevenge::RVNGString filename;
+-          filename.sprintf("freehandclipgroup%.4x.svg", group->m_elementsId);
+-          FILE *f = fopen(filename.cstr(), "wb");
+-          if (f)
+-          {
+-            const unsigned char *tmpBuffer = output.getDataBuffer();
+-            for (unsigned long k = 0; k < output.size(); k++)
+-              fprintf(f, "%c",tmpBuffer[k]);
+-            fclose(f);
+-          }
+-        }
+-#endif
+-        propList.insert("draw:stroke", "none");
+-        propList.insert("draw:fill", "bitmap");
+-        propList.insert("librevenge:mime-type", "image/svg+xml");
+-        propList.insert("style:repeat", "stretch");
+-        propList.insert("draw:fill-image", output);
+-        painter->setStyle(propList);
+-        painter->drawPath(pList);
+-      }
+-      if (!m_fakeTransforms.empty())
+-        m_fakeTransforms.pop_back();
++      librevenge::RVNGPropertyList clipProps;
++      clipProps.insert("svg:d", propVec);
++      if (fhPath.getEvenOdd())
++        clipProps.insert("svg:fill-rule", "evenodd");
++      painter->openGroup(clipProps);
++      _outputGroup(group, painter);
++      painter->closeGroup();
+     }
+   }
+ }
+@@ -1319,8 +1257,25 @@
+   const std::vector<unsigned> *elements = _findListElements(layerListId);
+   if (elements)
+   {
++    // Segnala i livelli nascosti in FreeHand: non vengono disegnati, ma il loro contenuto esiste.
++    int hiddenLayers = 0;
+     for (unsigned int element : *elements)
+     {
++      std::map<unsigned, FHLayer>::const_iterator layer = m_layers.find(element);
++      if (layer == m_layers.end() || layer->second.m_visibility != 2)
++        continue;
++      const std::vector<unsigned> *content = _findListElements(layer->second.m_elementsId);
++      if (content && !content->empty())
++        ++hiddenLayers;
++    }
++    if (hiddenLayers)
++    {
++      librevenge::RVNGPropertyList meta;
++      meta.insert("freehand:hidden-layers", hiddenLayers);
++      painter->setDocumentMetaData(meta);
++    }
++    for (unsigned int element : *elements)
++    {
+       _outputLayer(element, painter);
+     }
+   }
+@@ -1328,6 +1283,12 @@
+   painter->endDocument();
+ }
+ 
++namespace libfreehand
++{
++// Chiesto dall'utente: disegna anche i livelli nascosti in FreeHand.
++bool includeHiddenLayers = false;
++}
++
+ void libfreehand::FHCollector::_outputLayer(unsigned layerId, librevenge::RVNGDrawingInterface *painter)
+ {
+   if (!painter)
+@@ -1340,7 +1301,7 @@
+     return;
+   }
+ 
+-  if (layerIter->second.m_visibility != 3)
++  if (layerIter->second.m_visibility != 3 && !(includeHiddenLayers && layerIter->second.m_visibility == 2))
+     return;
+ 
+   unsigned layerElementsListId = layerIter->second.m_elementsId;
+@@ -1357,8 +1318,16 @@
+     return;
+   }
+ 
++  // Il nome e la visibilità servono a chi conserva i livelli, come il formato .ai.
++  librevenge::RVNGPropertyList layerProps;
++  std::map<unsigned, librevenge::RVNGString>::const_iterator name = m_strings.find(layerIter->second.m_nameId);
++  if (name != m_strings.end())
++    layerProps.insert("svg:id", name->second);
++  layerProps.insert("freehand:visible", layerIter->second.m_visibility == 3 ? 1 : 0);
++  painter->startLayer(layerProps);
+   for (unsigned int element : *elements)
+     _outputSomething(element, painter);
++  painter->endLayer();
+ }
+ 
+ void libfreehand::FHCollector::_outputCompositePath(const libfreehand::FHCompositePath *compositePath, librevenge::RVNGDrawingInterface *painter)
+@@ -1389,6 +1358,8 @@
+           fhPath.setGraphicStyleId(compositePath->m_graphicStyleId);
+       }
+     }
++    // In un tracciato composto le forme interne sono buchi, qualunque sia l'impostazione del primo tracciato.
++    fhPath.setEvenOdd(true);
+     _outputPath(&fhPath, painter);
+   }
+ }
+@@ -2675,6 +2646,8 @@
+   else if (!propList["svg:stroke-color"]) // set to default
+     propList.insert("svg:stroke-color", "#000000");
+   propList.insert("svg:stroke-width", basicLine->m_width);
++  if (basicLine->m_mitter > 0)
++    propList.insert("svg:stroke-miterlimit", basicLine->m_mitter * 72.0, librevenge::RVNG_GENERIC);
+   _appendLinePattern(propList, _findLinePattern(basicLine->m_linePatternId));
+   _appendArrowPath(propList, _findArrowPath(basicLine->m_startArrowId), true);
+   _appendArrowPath(propList, _findArrowPath(basicLine->m_endArrowId), false);
+@@ -2705,6 +2678,8 @@
+   else if (!propList["svg:stroke-color"]) // set to default
+     propList.insert("svg:stroke-color", "#000000");
+   propList.insert("svg:stroke-width", patternLine->m_width);
++  if (patternLine->m_mitter > 0)
++    propList.insert("svg:stroke-miterlimit", patternLine->m_mitter * 72.0, librevenge::RVNG_GENERIC);
+ }
+ 
+ const libfreehand::FHPath *libfreehand::FHCollector::_findPath(unsigned id)
+diff -ruN a/src/lib/FHParser.cpp b/src/lib/FHParser.cpp
+--- a/src/lib/FHParser.cpp	2026-11-06 19:03:50
++++ b/src/lib/FHParser.cpp	2026-11-06 19:03:50
+@@ -1290,7 +1290,7 @@
+     input->seek(4, librevenge::RVNG_SEEK_CUR);
+   input->seek(6, librevenge::RVNG_SEEK_CUR);
+   layer.m_elementsId = _readRecordId(input);
+-  _readRecordId(input);
++  layer.m_nameId = _readRecordId(input);
+   layer.m_visibility = readU16(input);
+   input->seek(2, librevenge::RVNG_SEEK_CUR);
+   if (collector)
+@@ -1552,12 +1552,12 @@
+ 
+ void libfreehand::FHParser::readOval(librevenge::RVNGInputStream *input, libfreehand::FHCollector *collector)
+ {
+-  unsigned short graphicStyle = _readRecordId(input);
++  unsigned graphicStyle = _readRecordId(input);
+   _readRecordId(input); // Layer
+   if (m_version > 3)
+     input->seek(4, librevenge::RVNG_SEEK_CUR);
+   input->seek(8, librevenge::RVNG_SEEK_CUR);
+-  unsigned short xform = _readRecordId(input);
++  unsigned xform = _readRecordId(input);
+   double xa = _readCoordinate(input) / 72.0;
+   double ya = _readCoordinate(input) / 72.0;
+   double xb = _readCoordinate(input) / 72.0;
+@@ -1805,10 +1805,10 @@
+ 
+ void libfreehand::FHParser::readPolygonFigure(librevenge::RVNGInputStream *input, libfreehand::FHCollector *collector)
+ {
+-  unsigned short graphicStyle = _readRecordId(input);
++  unsigned graphicStyle = _readRecordId(input);
+   _readRecordId(input); // Layer
+   input->seek(12, librevenge::RVNG_SEEK_CUR);
+-  unsigned short xform = _readRecordId(input);
++  unsigned xform = _readRecordId(input);
+   unsigned short numSegments = readU16(input);
+   auto evenodd = bool(readU8(input));
+   double cx = _readCoordinate(input) / 72.0;
+@@ -2632,9 +2632,14 @@
+ 
+ unsigned libfreehand::FHParser::_readRecordId(librevenge::RVNGInputStream *input)
+ {
++  // I numeri alti occupano due parole: la prima (0xffff, 0xfffe, 0xfffd) indica il blocco da 64K.
++  // In origine era gestito solo 0xffff, e i file con più di 130.000 elementi non si potevano leggere.
+   unsigned recid = readU16(input);
+-  if (recid == 0xffff)
+-    recid = 0x1ff00 - readU16(input);
++  if (recid >= 0xfffd)
++  {
++    unsigned block = 0xffff - recid;
++    recid = 0x1ff00 + block * 0x10000 - readU16(input);
++  }
+   return recid;
+ }
+ 
+diff -ruN a/src/lib/FHTypes.h b/src/lib/FHTypes.h
+--- a/src/lib/FHTypes.h	2026-11-06 19:03:50
++++ b/src/lib/FHTypes.h	2026-11-06 19:03:50
+@@ -63,7 +63,8 @@
+   unsigned m_graphicStyleId;
+   unsigned m_elementsId;
+   unsigned m_visibility;
+-  FHLayer() : m_graphicStyleId(0), m_elementsId(0), m_visibility(0) {}
++  unsigned m_nameId;
++  FHLayer() : m_graphicStyleId(0), m_elementsId(0), m_visibility(0), m_nameId(0) {}
+ };
+ 
+ struct FHGroup
+diff -ruN a/src/lib/libfreehand_utils.h b/src/lib/libfreehand_utils.h
+--- a/src/lib/libfreehand_utils.h	2026-11-06 19:03:50
++++ b/src/lib/libfreehand_utils.h	2026-11-06 19:03:50
+@@ -18,7 +18,7 @@
+ #include <string>
+ #include <math.h>
+ 
+-#include <boost/cstdint.hpp>
++#include <cstdint>
+ 
+ #include <librevenge/librevenge.h>
+ 
